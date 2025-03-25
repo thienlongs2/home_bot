@@ -2,12 +2,13 @@
 #property link      "https://yourwebsite.com"
 #property version   "1.01"
 
-input double RiskPercent = 0.05; // Risk per trade (%)
-input double TP = 120;           // Take Profit (pips)
-input double SL = 70;            // Stop Loss (pips)
-input int MagicNumber = 12345;   // Magic Number
-input double MaxPriceDeviation = 10; // Độ lệch tối đa so với giá API (pips)
-input string API_KEY = "your_api_key_here"; // API Key
+input double RiskPercent = 0.02;        // Risk per trade (%)
+input double TP = 120;                  // Take Profit (pips)
+input double SL = 70;                   // Stop Loss (pips)
+input int MagicNumber = 12345;          // Magic Number
+input double MaxPriceDeviation = 5;     // Độ lệch tối đa so với giá API (pips)
+input string API_KEY = "key123";        // API Key
+input int TimerInterval = 5000;         // Chu kỳ timer (ms), mặc định 5 giây
 
 #include <Trade\Trade.mqh>
 CTrade trade;
@@ -18,47 +19,51 @@ string last_signal = "";
 // Hàm khởi tạo EA
 int OnInit() {
    trade.SetExpertMagicNumber(MagicNumber);
-   Print("EA khởi tạo thành công với MagicNumber: ", MagicNumber);
+   if (!TerminalInfoInteger(TERMINAL_DLLS_ALLOWED)) {
+      Print("Lỗi: Vui lòng bật 'Allow WebRequest' trong Cài đặt MT5 và thêm URL: ", url);
+      return(INIT_FAILED);
+   }
+   EventSetTimer(TimerInterval / 1000); // Thiết lập timer (giây)
+   Print("EA khởi tạo thành công. MagicNumber: ", MagicNumber, ", Timer: ", TimerInterval / 1000, " giây");
    return(INIT_SUCCEEDED);
 }
 
-// Hàm xử lý mỗi tick
-void OnTick() {
+// Hàm xử lý theo timer
+void OnTimer() {
+   //Print("OnTimer chạy tại: ", TimeToString(TimeCurrent()));
    string response = GetSignalFromServer();
    if (response != "" && response != "{}") {
       ProcessSignal(response);
    }
 }
 
-// Nhận tín hiệu từ server với API Key
+// Nhận tín hiệu từ server
 string GetSignalFromServer() {
-   if (!TerminalInfoInteger(TERMINAL_DLLS_ALLOWED)) {
-      Print("Lỗi: Vui lòng cho phép WebRequest trong phần Cài đặt của MT5.");
-      return "";
-   }
+   string mt5_account = IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
+   string request_url = url + "?mt5_account=" + mt5_account + "&api_key=" + API_KEY;
+   string headers = "Content-Type: application/json\r\n" +
+                    "Accept: application/json\r\n" +
+                    "User-Agent: MT5-EA\r\n";
 
-   string request_url = url + "?api_key=" + API_KEY + "&mt5_account=" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
-   string headers;
+   //Print("Gửi request tới: ", request_url);
+   char post_data[];
    char result[];
-   char post_data[];  // WebRequest cần một biến dữ liệu đầu vào, ngay cả khi không dùng
+   string result_headers;
 
    ResetLastError();
-
-   // Gọi WebRequest với đúng số lượng tham số
-   int res = WebRequest("GET", request_url, "", 0, post_data, result, headers);
+   int res = WebRequest("GET", request_url, headers, NULL, 5000, post_data, 0, result, result_headers);
 
    if (res == 200) {
       string response = CharArrayToString(result);
-      Print("Nhận tín hiệu thành công: ", response);
+      //Print("Nhận phản hồi: ", response);
       return response;
    } else {
-      Print("Lỗi nhận tín hiệu từ server. Mã lỗi: ", res, " | Lỗi hệ thống: ", GetLastError());
+      Print("Lỗi nhận tín hiệu. HTTP: ", res, " | MT5 Error: ", GetLastError());
       return "";
    }
 }
 
-
-// Tính toán khối lượng lệnh dựa trên rủi ro
+// Tính toán khối lượng lệnh
 double CalculateLotSize(double stopLossPips) {
    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    double riskAmount = accountBalance * RiskPercent;
@@ -70,11 +75,29 @@ double CalculateLotSize(double stopLossPips) {
       return 0.01;
    }
 
-   double lotSize = riskAmount / (stopLossPips * tickValue / tickSize);
+   double pipSize = 0.0001;
+   double pipValuePerLot = tickValue * (pipSize / tickSize);
+   double totalRiskPerLot = stopLossPips * pipValuePerLot;
+   double lotSize = riskAmount / totalRiskPerLot;
 
    lotSize = NormalizeDouble(lotSize, 2);
+   return MathMax(lotSize, 0.01);
+}
 
-   return MathMax(lotSize, 0.01); // Đảm bảo khối lượng không nhỏ hơn 0.01
+// Kiểm tra loại lệnh đang mở
+string GetCurrentPositionType() {
+   for (int i = PositionsTotal() - 1; i >= 0; i--) {
+      if (PositionSelectByTicket(PositionGetTicket(i))) {
+         if (PositionGetInteger(POSITION_MAGIC) == MagicNumber) {
+            if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
+               return "buy";
+            } else if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL) {
+               return "sell";
+            }
+         }
+      }
+   }
+   return "";
 }
 
 // Xử lý tín hiệu từ API
@@ -84,7 +107,12 @@ void ProcessSignal(string signal_json) {
    double api_price = StringToDouble(ExtractJsonValue(signal_json, "\"current_price\":", ","));
 
    if (magic_number != MagicNumber) {
-      Print("Magic Number không khớp: ", magic_number);
+      Print("Magic Number không khớp: ", magic_number, " (Kỳ vọng: ", MagicNumber, ")");
+      return;
+   }
+
+   if (api_price == 0.0) {
+      Print("Giá từ API không hợp lệ: ", signal_json);
       return;
    }
 
@@ -92,15 +120,18 @@ void ProcessSignal(string signal_json) {
    double current_ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double price_deviation = MathAbs(current_bid - api_price) * 10000;
 
-   if (price_deviation > MaxPriceDeviation) {
-      Print("Giá lệch quá ", MaxPriceDeviation, " pips, bỏ qua lệnh.");
+   string current_position_type = GetCurrentPositionType();
+   if (current_position_type != "" && current_position_type == signal) {
+      //Print("Bỏ qua lệnh vì đã có lệnh ", signal, " đang mở.");
       return;
    }
 
-   if (CountOpenPositions() > 0 && signal == last_signal) {
-      Print("Bỏ qua lệnh vì tín hiệu trùng lặp.");
+   if (price_deviation > MaxPriceDeviation) {
+      Print("Giá lệch quá ", MaxPriceDeviation, " pips (Độ lệch: ", price_deviation, ")");
       return;
    }
+
+
 
    if (signal == "buy") {
       OpenBuy(current_ask);
@@ -141,37 +172,34 @@ void CloseAll() {
    for (int i = PositionsTotal() - 1; i >= 0; i--) {
       if (PositionSelectByTicket(PositionGetTicket(i))) {
          if (PositionGetInteger(POSITION_MAGIC) == MagicNumber) {
-            trade.PositionClose(PositionGetTicket(i));
-            Print("Đã đóng lệnh: ", PositionGetTicket(i));
+            if (!trade.PositionClose(PositionGetTicket(i))) {
+               Print("Lỗi đóng lệnh: ", PositionGetTicket(i), " - Mã lỗi: ", GetLastError());
+            } else {
+               Print("Đã đóng lệnh: ", PositionGetTicket(i));
+            }
          }
       }
    }
-}
-
-// Đếm số lệnh đang mở với MagicNumber
-int CountOpenPositions() {
-   int count = 0;
-   for (int i = PositionsTotal() - 1; i >= 0; i--) {
-      if (PositionSelectByTicket(PositionGetTicket(i))) {
-         if (PositionGetInteger(POSITION_MAGIC) == MagicNumber) {
-            count++;
-         }
-      }
-   }
-   return count;
 }
 
 // Trích xuất giá trị từ JSON
 string ExtractJsonValue(string json, string key, string end_char) {
-   int start_pos = StringFind(json, key) + StringLen(key);
+   int start_pos = StringFind(json, key);
+   if (start_pos == -1) {
+      Print("Không tìm thấy khóa: ", key);
+      return "";
+   }
+   start_pos += StringLen(key);
    int end_pos = StringFind(json, end_char, start_pos);
-   if (start_pos >= 0 && end_pos > start_pos) {
+   if (end_pos > start_pos) {
       return StringSubstr(json, start_pos, end_pos - start_pos);
    }
+   Print("Không tìm thấy ký tự kết thúc trong JSON: ", json);
    return "";
 }
 
 // Hàm dọn dẹp
 void OnDeinit(const int reason) {
+   EventKillTimer();
    Print("EA đã dừng, lý do: ", reason);
 }
