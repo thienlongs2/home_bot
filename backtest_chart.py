@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 import matplotlib.pyplot as plt
+import pandas_ta as ta
 
 # Khởi tạo kết nối MT5
 if not mt5.initialize():
@@ -13,48 +14,6 @@ if not mt5.initialize():
 print("Đã kết nối với MT5")
 mau_tien = "GBPUSD"
 
-# Tính toán Supertrend
-def tinh_supertrend(df, chu_ky=10, he_so=2.0):
-    df['hl2'] = (df['high'] + df['low']) / 2
-    df['tr'] = np.maximum.reduce([df['high'] - df['low'],
-                                  abs(df['high'] - df['close'].shift(1)),
-                                  abs(df['low'] - df['close'].shift(1))])
-    df['atr'] = df['tr'].rolling(window=chu_ky).mean()
-
-    df['bang_tren'] = df['hl2'] - (he_so * df['atr'])
-    df['bang_duoi'] = df['hl2'] + (he_so * df['atr'])
-    df['bang_tren'] = df['bang_tren'].fillna(method='bfill')
-    df['bang_duoi'] = df['bang_duoi'].fillna(method='bfill')
-
-    df['bang_tren'] = np.where(df['close'].shift(1) > df['bang_tren'].shift(1),
-                               np.maximum(df['bang_tren'], df['bang_tren'].shift(1)),
-                               df['bang_tren'])
-    df['bang_duoi'] = np.where(df['close'].shift(1) < df['bang_duoi'].shift(1),
-                               np.minimum(df['bang_duoi'], df['bang_duoi'].shift(1)),
-                               df['bang_duoi'])
-
-    df['xu_huong'] = 1
-    df['xu_huong'] = np.where((df['xu_huong'].shift(1) == -1) & (df['close'] > df['bang_duoi'].shift(1)), 1,
-                              np.where((df['xu_huong'].shift(1) == 1) & (df['close'] < df['bang_tren'].shift(1)), -1,
-                                       df['xu_huong'].shift(1)))
-    df['xu_huong'] = df['xu_huong'].fillna(1)
-    return df
-
-# Tính toán Bollinger Bands và Bandwidth
-def tinh_bollinger_bands(df, chu_ky=20, he_so=2.0):
-    df['sma'] = df['close'].rolling(window=chu_ky).mean()
-    df['std'] = df['close'].rolling(window=chu_ky).std()
-    df['upper_band'] = df['sma'] + (he_so * df['std'])
-    df['lower_band'] = df['sma'] - (he_so * df['std'])
-    # Tính bandwidth
-    df['bandwidth'] = (df['upper_band'] - df['lower_band']) / df['sma']
-    # Xử lý NaN ban đầu
-    df['sma'] = df['sma'].fillna(method='bfill')
-    df['upper_band'] = df['upper_band'].fillna(method='bfill')
-    df['lower_band'] = df['lower_band'].fillna(method='bfill')
-    df['bandwidth'] = df['bandwidth'].fillna(method='bfill')
-    return df
-
 # Lấy dữ liệu từ MT5
 def lay_du_lieu(khung_thoi_gian, ngay_bat_dau, ngay_ket_thuc):
     du_lieu = mt5.copy_rates_range(mau_tien, khung_thoi_gian, ngay_bat_dau, ngay_ket_thuc)
@@ -64,21 +23,21 @@ def lay_du_lieu(khung_thoi_gian, ngay_bat_dau, ngay_ket_thuc):
     return df
 
 # Backtest chiến lược
-def backtest_chien_luoc(ngay_bat_dau, ngay_ket_thuc, von_ban_dau=1000, risk_percent=0.05, bandwidth_nguong=0.01):
+def backtest_chien_luoc(ngay_bat_dau, ngay_ket_thuc, von_ban_dau=1000, risk_percent=0.05):
     # Lấy dữ liệu H4 và M15
     du_lieu_h4 = lay_du_lieu(mt5.TIMEFRAME_H4, ngay_bat_dau, ngay_ket_thuc)
     du_lieu_m15 = lay_du_lieu(mt5.TIMEFRAME_M15, ngay_bat_dau, ngay_ket_thuc)
 
-    # Tính toán chỉ báo Supertrend và Bollinger Bands trên H4
-    du_lieu_h4 = tinh_supertrend(du_lieu_h4)
-    du_lieu_h4 = tinh_bollinger_bands(du_lieu_h4)
+    # Tính toán Supertrend trên H4
+    du_lieu_h4[['supertrend', 'xu_huong']] = ta.supertrend(
+        du_lieu_h4['high'], du_lieu_h4['low'], du_lieu_h4['close'], length=10, multiplier=2)[['SUPERT_10_2.0', 'SUPERTd_10_2.0']]
 
     # Kết hợp dữ liệu H4 vào M15
     du_lieu_m15['time_h4'] = du_lieu_m15['time'].dt.floor('4h')
     du_lieu_h4.set_index('time', inplace=True)
-    du_lieu_m15 = du_lieu_m15.merge(du_lieu_h4[['xu_huong', 'bandwidth']], left_on='time_h4', right_index=True, how='left')
-    du_lieu_m15.loc[:, 'xu_huong'] = du_lieu_m15['xu_huong'].ffill()
-    du_lieu_m15.loc[:, 'bandwidth'] = du_lieu_m15['bandwidth'].ffill()
+    du_lieu_m15 = du_lieu_m15.merge(du_lieu_h4[['xu_huong', 'supertrend']],
+                                  left_on='time_h4', right_index=True, how='left')
+    du_lieu_m15[['xu_huong', 'supertrend']] = du_lieu_m15[['xu_huong', 'supertrend']].ffill()
 
     # Biến theo dõi giao dịch
     von = von_ban_dau
@@ -100,7 +59,6 @@ def backtest_chien_luoc(ngay_bat_dau, ngay_ket_thuc, von_ban_dau=1000, risk_perc
     # Duyệt qua từng nến M15
     for i in range(1, len(du_lieu_m15)):
         xu_huong_h4 = du_lieu_m15['xu_huong'].iloc[i]
-        bandwidth_h4 = du_lieu_m15['bandwidth'].iloc[i]
         gia_hien_tai = du_lieu_m15['close'].iloc[i]
 
         # Tính lot size dựa trên rủi ro % vốn
@@ -114,19 +72,19 @@ def backtest_chien_luoc(ngay_bat_dau, ngay_ket_thuc, von_ban_dau=1000, risk_perc
         elif vi_tri == 'sell':
             loi_nhuan_pip = (gia_vao - gia_hien_tai) * 10000
 
-        # Điều kiện mua: chỉ giao dịch khi bandwidth > ngưỡng
-        if vi_tri is None and xu_huong_h4 == 1 and bandwidth_h4 > bandwidth_nguong:
+        # Điều kiện mua: Chỉ dựa vào Supertrend H4
+        if vi_tri is None and xu_huong_h4 == 1:
             vi_tri = 'buy'
             gia_vao = gia_hien_tai
             trailing_stop = gia_vao - 0.0070
-            print(f"{du_lieu_m15['time'].iloc[i]} - Mua tại {gia_vao} (Bandwidth: {bandwidth_h4:.4f})")
+            print(f"{du_lieu_m15['time'].iloc[i]} - Mua tại {gia_vao}")
 
-        # Điều kiện bán: chỉ giao dịch khi bandwidth > ngưỡng
-        elif vi_tri is None and xu_huong_h4 == -1 and bandwidth_h4 > bandwidth_nguong:
+        # Điều kiện bán: Chỉ dựa vào Supertrend H4
+        elif vi_tri is None and xu_huong_h4 == -1:
             vi_tri = 'sell'
             gia_vao = gia_hien_tai
             trailing_stop = gia_vao + 0.0070
-            print(f"{du_lieu_m15['time'].iloc[i]} - Bán tại {gia_vao} (Bandwidth: {bandwidth_h4:.4f})")
+            print(f"{du_lieu_m15['time'].iloc[i]} - Bán tại {gia_vao}")
 
         # Thoát lệnh
         elif vi_tri == 'buy' and (xu_huong_h4 == -1 or loi_nhuan_pip >= 120 or loi_nhuan_pip <= -70):
@@ -190,7 +148,6 @@ def backtest_chien_luoc(ngay_bat_dau, ngay_ket_thuc, von_ban_dau=1000, risk_perc
     # In kết quả
     print("\n=== Kết quả Backtest ===")
     print(f"Risk per trade: {risk_percent*100:.2f}%")
-    print(f"Bandwidth ngưỡng: {bandwidth_nguong:.4f}")
     print(f"Vốn ban đầu: {von_ban_dau:.2f} USD")
     print(f"Vốn cuối kỳ: {von:.2f} USD")
     print(f"Tổng lợi nhuận: {tong_loi_nhuan:.2f} USD")
@@ -207,7 +164,6 @@ def backtest_chien_luoc(ngay_bat_dau, ngay_ket_thuc, von_ban_dau=1000, risk_perc
     # Chuẩn bị văn bản cho biểu đồ
     thong_so = (
         f"Risk per trade: {risk_percent*100:.2f}%\n"
-        f"Bandwidth ngưỡng: {bandwidth_nguong:.4f}\n"
         f"Vốn ban đầu: {von_ban_dau:.2f} USD\n"
         f"Vốn cuối kỳ: {von:.2f} USD\n"
         f"Tổng lợi nhuận: {tong_loi_nhuan:.2f} USD\n"
@@ -237,7 +193,7 @@ def backtest_chien_luoc(ngay_bat_dau, ngay_ket_thuc, von_ban_dau=1000, risk_perc
     plt.text(0.02, 0.98, thong_so, transform=plt.gca().transAxes, fontsize=10,
              verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
-    plt.title('Biểu đồ Lãi/Lỗ của Chiến lược (có Bollinger Bandwidth)')
+    plt.title('Biểu đồ Lãi/Lỗ của Chiến lược (Supertrend H4)')
     plt.xlabel('Thời gian')
     plt.ylabel('Vốn (USD)')
     plt.legend()
@@ -260,6 +216,9 @@ def backtest_chien_luoc(ngay_bat_dau, ngay_ket_thuc, von_ban_dau=1000, risk_perc
 
 # Chạy backtest
 if __name__ == "__main__":
-    ngay_bat_dau = datetime(2023, 1, 21)
-    ngay_ket_thuc = datetime(2025, 3, 21)
-    backtest_chien_luoc(ngay_bat_dau, ngay_ket_thuc, von_ban_dau=1000, bandwidth_nguong=0.01)
+    ngay_bat_dau = datetime(2024, 8, 9)
+    ngay_ket_thuc = datetime(2025, 3, 26)
+    backtest_chien_luoc(ngay_bat_dau, ngay_ket_thuc, von_ban_dau=1000, risk_percent=0.05)
+
+    # Đóng kết nối MT5
+    mt5.shutdown()
