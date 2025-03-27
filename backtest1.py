@@ -20,6 +20,9 @@ def tinh_supertrend(df, chu_ky=10, he_so=2.0):
                                   abs(df['high'] - df['close'].shift(1)),
                                   abs(df['low'] - df['close'].shift(1))])
     df['atr'] = df['tr'].rolling(window=chu_ky).mean()
+    for i in range(len(df)):
+        atr_value = df['atr'].iloc[i] if not pd.isna(df['atr'].iloc[i]) else 0
+        print(f"Bar {i}: HL2={df['hl2'].iloc[i]:.5f}, TR={df['tr'].iloc[i]:.5f}, ATR={atr_value:.5f}")
 
     df['bang_tren'] = df['hl2'] - (he_so * df['atr'])
     df['bang_duoi'] = df['hl2'] + (he_so * df['atr'])
@@ -35,6 +38,9 @@ def tinh_supertrend(df, chu_ky=10, he_so=2.0):
     df['xu_huong'] = np.where((df['xu_huong'].shift(1) == -1) & (df['close'] > df['bang_duoi'].shift(1)), 1,
                               np.where((df['xu_huong'].shift(1) == 1) & (df['close'] < df['bang_tren'].shift(1)), -1,
                                        df['xu_huong'].shift(1)))
+    # In giá trị Supertrend sau khi tính toán
+    for i in range(len(df)):
+        print(f"Bar {i}: Upper={df['bang_tren'].iloc[i]:.5f}, Lower={df['bang_duoi'].iloc[i]:.5f}, Trend={df['xu_huong'].iloc[i]}, Close={df['close'].iloc[i]:.5f}")
     return df
 
 # Lấy dữ liệu từ MT5
@@ -238,6 +244,6 @@ def backtest_chien_luoc(ngay_bat_dau, ngay_ket_thuc, von_ban_dau=1000, risk_perc
 
 # Chạy backtest
 if __name__ == "__main__":
-    ngay_bat_dau = datetime(2024, 9, 21)
-    ngay_ket_thuc = datetime(2025, 3, 21)
+    ngay_bat_dau = datetime(2025, 2, 1)
+    ngay_ket_thuc = datetime(2025, 3, 25)
     backtest_chien_luoc(ngay_bat_dau, ngay_ket_thuc, von_ban_dau=1000)

@@ -50,10 +50,11 @@ def lay_du_lieu(khung_thoi_gian, so_nen=100):
     return df
 
 # Cập nhật tín hiệu
-def update_signal(signal, magic_number=12345):
+def update_signal(signal, current_price, magic_number=12345):
     global current_signal
     current_signal = {
         "signal": signal,
+        "current_price": float(current_price),  # Giá hiện tại của GBPUSD
         "magic_number": magic_number,
         "timestamp": datetime.now().isoformat()
     }

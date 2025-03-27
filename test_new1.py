@@ -26,11 +26,16 @@ def lay_du_lieu(khung_thoi_gian, ngay_bat_dau, ngay_ket_thuc):
 def backtest_chien_luoc(ngay_bat_dau, ngay_ket_thuc, von_ban_dau=1000, risk_percent=0.05):
     # Lấy dữ liệu H4 và M15
     du_lieu_h4 = lay_du_lieu(mt5.TIMEFRAME_H4, ngay_bat_dau, ngay_ket_thuc)
-    du_lieu_m15 = lay_du_lieu(mt5.TIMEFRAME_M15, ngay_bat_dau, ngay_ket_thuc)
+    du_lieu_m15 = lay_du_lieu(mt5.TIMEFRAME_M5, ngay_bat_dau, ngay_ket_thuc)
 
-    # Tính toán Supertrend trên H4
-    du_lieu_h4[['supertrend', 'xu_huong']] = ta.supertrend(
-        du_lieu_h4['high'], du_lieu_h4['low'], du_lieu_h4['close'], length=10, multiplier=2)[['SUPERT_10_2.0', 'SUPERTd_10_2.0']]
+    du_lieu_h4.to_csv("du_lieu_H4.csv", index=False, encoding="utf-8")
+    du_lieu_m15.to_csv("du_lieu_m15.csv", index=False, encoding="utf-8")
+    print("Dữ liệu đã được lưu thành công.")
+
+    # Tính Supertrend
+    supertrend = ta.supertrend(du_lieu_h4['high'], du_lieu_h4['low'], du_lieu_h4['close'], length=10, multiplier=2)
+    du_lieu_h4['supertrend'] = supertrend['SUPERT_10_2.0']
+    du_lieu_h4['xu_huong'] = supertrend['SUPERTd_10_2.0']
 
     # Kết hợp dữ liệu H4 vào M15
     du_lieu_m15['time_h4'] = du_lieu_m15['time'].dt.floor('4h')
@@ -39,11 +44,22 @@ def backtest_chien_luoc(ngay_bat_dau, ngay_ket_thuc, von_ban_dau=1000, risk_perc
                                   left_on='time_h4', right_index=True, how='left')
     du_lieu_m15[['xu_huong', 'supertrend']] = du_lieu_m15[['xu_huong', 'supertrend']].ffill()
 
+    # Thêm các cột mới vào du_lieu_m15
+    du_lieu_m15['vi_tri'] = None  # buy, sell, hold buy, hold sell, close
+    du_lieu_m15['khoang_cach_supertrend'] = 0.0  # Khoảng cách giữa close và supertrend
+    du_lieu_m15['gia_vao_lenh'] = 0.0  # Giá vào lệnh
+    du_lieu_m15['gia_thoat_lenh'] = 0.0  # Giá thoát lệnh
+    du_lieu_m15['volume'] = 0.0  # Volume (lot size) vào lệnh
+    du_lieu_m15['loi_nhuan_pip'] = 0.0  # Lợi nhuận tính bằng pip
+    du_lieu_m15['loi_nhuan_usd'] = 0.0  # Lợi nhuận tính bằng USD
+    du_lieu_m15['ly_do'] = None  # Lý do cho hành động buy/hold/sell/close
+
     # Biến theo dõi giao dịch
     von = von_ban_dau
     vi_tri = None
     gia_vao = 0
     trailing_stop = 0
+    khoi_luong = 0
     loi_nhuan = []
     thang = 0
     thua = 0
@@ -54,44 +70,85 @@ def backtest_chien_luoc(ngay_bat_dau, ngay_ket_thuc, von_ban_dau=1000, risk_perc
     so_du = []
     thoi_gian_so_du = []
     drawdown_max = 0
+    peak = von_ban_dau  # Theo dõi đỉnh cao nhất của vốn
     loi_nhuan_theo_thang = []
 
     # Duyệt qua từng nến M15
     for i in range(1, len(du_lieu_m15)):
         xu_huong_h4 = du_lieu_m15['xu_huong'].iloc[i]
+        supertrend_value = du_lieu_m15['supertrend'].iloc[i]
         gia_hien_tai = du_lieu_m15['close'].iloc[i]
+        du_lieu_m15.at[i, 'gia_hien_tai'] = gia_hien_tai
+
+
+        # Tính khoảng cách giữa giá close và Supertrend
+        khoang_cach = gia_hien_tai - supertrend_value
+        du_lieu_m15.at[i, 'khoang_cach_supertrend'] = khoang_cach
 
         # Tính lot size dựa trên rủi ro % vốn
         pip_risk = 70
         pip_value = 0.0001 * 100000
-        khoi_luong = (von * risk_percent) / (pip_risk * pip_value)
+        khoi_luong_tinh_toan = (von * risk_percent) / (pip_risk * pip_value)
+        khoi_luong_tinh_toan = max(0.01, np.floor(khoi_luong_tinh_toan * 100) / 100)
 
         # Tính lợi nhuận pip
         if vi_tri == 'buy':
             loi_nhuan_pip = (gia_hien_tai - gia_vao) * 10000
+            du_lieu_m15.at[i, 'vi_tri'] = 'hold buy'
+            du_lieu_m15.at[i, 'ly_do'] = 'Đang giữ lệnh mua'
+            du_lieu_m15.at[i, 'gia_vao_lenh'] = gia_vao
+            du_lieu_m15.at[i, 'volume'] = khoi_luong
         elif vi_tri == 'sell':
             loi_nhuan_pip = (gia_vao - gia_hien_tai) * 10000
+            du_lieu_m15.at[i, 'vi_tri'] = 'hold sell'
+            du_lieu_m15.at[i, 'ly_do'] = 'Đang giữ lệnh bán'
+            du_lieu_m15.at[i, 'gia_vao_lenh'] = gia_vao
+            du_lieu_m15.at[i, 'volume'] = khoi_luong
+        else:
+            loi_nhuan_pip = 0
+            du_lieu_m15.at[i, 'vi_tri'] = None
+            du_lieu_m15.at[i, 'ly_do'] = 'Không có vị trí'
+            du_lieu_m15.at[i, 'gia_vao_lenh'] = 0.0
+            du_lieu_m15.at[i, 'volume'] = 0.0
+
+        du_lieu_m15.at[i, 'loi_nhuan_pip'] = loi_nhuan_pip
 
         # Điều kiện mua: Chỉ dựa vào Supertrend H4
-        if vi_tri is None and xu_huong_h4 == 1:
+        if vi_tri is None and xu_huong_h4 == 1 and supertrend_value > 0:
             vi_tri = 'buy'
             gia_vao = gia_hien_tai
             trailing_stop = gia_vao - 0.0070
+            khoi_luong = khoi_luong_tinh_toan
+            du_lieu_m15.at[i, 'vi_tri'] = 'buy'
+            du_lieu_m15.at[i, 'volume'] = khoi_luong
+            du_lieu_m15.at[i, 'gia_vao_lenh'] = gia_vao
+            du_lieu_m15.at[i, 'ly_do'] = 'Mua: Xu hướng H4 tăng & Supertrend > 0'
             print(f"{du_lieu_m15['time'].iloc[i]} - Mua tại {gia_vao}")
 
         # Điều kiện bán: Chỉ dựa vào Supertrend H4
-        elif vi_tri is None and xu_huong_h4 == -1:
+        elif vi_tri is None and xu_huong_h4 == -1 and supertrend_value > 0:
             vi_tri = 'sell'
             gia_vao = gia_hien_tai
             trailing_stop = gia_vao + 0.0070
+            khoi_luong = khoi_luong_tinh_toan
+            du_lieu_m15.at[i, 'vi_tri'] = 'sell'
+            du_lieu_m15.at[i, 'volume'] = khoi_luong
+            du_lieu_m15.at[i, 'gia_vao_lenh'] = gia_vao
+            du_lieu_m15.at[i, 'ly_do'] = 'Bán: Xu hướng H4 giảm & Supertrend > 0'
             print(f"{du_lieu_m15['time'].iloc[i]} - Bán tại {gia_vao}")
 
-        # Thoát lệnh
+        # Thoát lệnh mua
         elif vi_tri == 'buy' and (xu_huong_h4 == -1 or loi_nhuan_pip >= 120 or loi_nhuan_pip <= -70):
             loi_nhuan_giao_dich = (gia_hien_tai - gia_vao) * khoi_luong * 100000
             von += loi_nhuan_giao_dich
             loi_nhuan.append(loi_nhuan_giao_dich)
             loi_nhuan_theo_thang.append((du_lieu_m15['time'].iloc[i], loi_nhuan_giao_dich))
+            if xu_huong_h4 == -1:
+                ly_do = 'Đóng mua: Xu hướng H4 đảo chiều giảm'
+            elif loi_nhuan_pip >= 120:
+                ly_do = 'Đóng mua: Chạm mục tiêu lợi nhuận 120 pip'
+            else:
+                ly_do = 'Đóng mua: Chạm mức cắt lỗ -70 pip'
             print(f"{du_lieu_m15['time'].iloc[i]} - Đóng mua tại {gia_hien_tai}, Lợi nhuận: {loi_nhuan_giao_dich:.2f} ({loi_nhuan_pip:.1f} pip)")
             if loi_nhuan_giao_dich > 0:
                 thang += 1
@@ -99,16 +156,29 @@ def backtest_chien_luoc(ngay_bat_dau, ngay_ket_thuc, von_ban_dau=1000, risk_perc
             else:
                 thua += 1
                 loi_nhuan_thua.append(loi_nhuan_giao_dich)
+            # du_lieu_m15.at[i, 'gia_thoat_lenh'] = gia_hien_tai
+            du_lieu_m15.at[i, 'loi_nhuan_usd'] = loi_nhuan_giao_dich
+            du_lieu_m15.at[i, 'vi_tri'] = 'close'
+            du_lieu_m15.at[i, 'volume'] = khoi_luong
+            du_lieu_m15.at[i, 'ly_do'] = ly_do
             vi_tri = None
+            khoi_luong = 0
             trailing_stop = 0
             duong_von.append(von)
             thoi_gian.append(du_lieu_m15['time'].iloc[i])
 
+        # Thoát lệnh bán
         elif vi_tri == 'sell' and (xu_huong_h4 == 1 or loi_nhuan_pip >= 120 or loi_nhuan_pip <= -70):
             loi_nhuan_giao_dich = (gia_vao - gia_hien_tai) * khoi_luong * 100000
             von += loi_nhuan_giao_dich
             loi_nhuan.append(loi_nhuan_giao_dich)
             loi_nhuan_theo_thang.append((du_lieu_m15['time'].iloc[i], loi_nhuan_giao_dich))
+            if xu_huong_h4 == 1:
+                ly_do = 'Đóng bán: Xu hướng H4 đảo chiều tăng'
+            elif loi_nhuan_pip >= 120:
+                ly_do = 'Đóng bán: Chạm mục tiêu lợi nhuận 120 pip'
+            else:
+                ly_do = 'Đóng bán: Chạm mức cắt lỗ -70 pip'
             print(f"{du_lieu_m15['time'].iloc[i]} - Đóng bán tại {gia_hien_tai}, Lợi nhuận: {loi_nhuan_giao_dich:.2f} ({loi_nhuan_pip:.1f} pip)")
             if loi_nhuan_giao_dich > 0:
                 thang += 1
@@ -116,26 +186,43 @@ def backtest_chien_luoc(ngay_bat_dau, ngay_ket_thuc, von_ban_dau=1000, risk_perc
             else:
                 thua += 1
                 loi_nhuan_thua.append(loi_nhuan_giao_dich)
+            # du_lieu_m15.at[i, 'gia_thoat_lenh'] = gia_hien_tai
+            du_lieu_m15.at[i, 'loi_nhuan_usd'] = loi_nhuan_giao_dich
+            du_lieu_m15.at[i, 'vi_tri'] = 'close'
+            du_lieu_m15.at[i, 'volume'] = khoi_luong
+            du_lieu_m15.at[i, 'ly_do'] = ly_do
             vi_tri = None
+            khoi_luong = 0
             trailing_stop = 0
             duong_von.append(von)
             thoi_gian.append(du_lieu_m15['time'].iloc[i])
 
-        # Cập nhật số dư khi có vị trí mở
+        # Cập nhật số dư và drawdown
         if vi_tri is not None:
             if vi_tri == 'buy':
                 so_du_hien_tai = von + (gia_hien_tai - gia_vao) * khoi_luong * 100000
+                du_lieu_m15.at[i, 'loi_nhuan_usd'] = (gia_hien_tai - gia_vao) * khoi_luong * 100000
             else:  # sell
                 so_du_hien_tai = von + (gia_vao - gia_hien_tai) * khoi_luong * 100000
+                du_lieu_m15.at[i, 'loi_nhuan_usd'] = (gia_vao - gia_hien_tai) * khoi_luong * 100000
+        else:
+            so_du_hien_tai = von
 
-            so_du.append(so_du_hien_tai)
-            thoi_gian_so_du.append(du_lieu_m15['time'].iloc[i])
-            duong_von.append(von)
-            thoi_gian.append(du_lieu_m15['time'].iloc[i])
+        so_du.append(so_du_hien_tai)
+        thoi_gian_so_du.append(du_lieu_m15['time'].iloc[i])
+        duong_von.append(von)
+        thoi_gian.append(du_lieu_m15['time'].iloc[i])
 
-            # Tính drawdown tối đa
-            drawdown = von_ban_dau - min(so_du_hien_tai, von)
-            drawdown_max = max(drawdown_max, drawdown)
+        # Cập nhật đỉnh cao nhất và tính drawdown
+        peak = max(peak, so_du_hien_tai)
+        drawdown = peak - so_du_hien_tai
+        drawdown_max = max(drawdown_max, drawdown)
+
+    # Lưu dữ liệu M15 với các cột mới
+    du_lieu_m15.to_csv("du_lieu_meger.csv", index=False, encoding="utf-8")
+    du_lieu_m15.to_excel("du_lieu_meger_excel.xlsx", index=False)
+
+    print("Dữ liệu M15 với các thông tin giao dịch và lý do đã được lưu vào 'du_lieu_meger.csv'.")
 
     # Tính toán kết quả
     tong_loi_nhuan = sum(loi_nhuan) if loi_nhuan else 0

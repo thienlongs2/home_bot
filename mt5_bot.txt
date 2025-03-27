@@ -13,69 +13,73 @@ input double MaxPriceDeviation = 10; // Độ lệch tối đa so với giá API
 CTrade trade;
 
 string url = "http://localhost:8000/get_signal";
-string last_signal = ""; // Lưu tín hiệu cuối cùng để tránh lặp lệnh
+string last_signal = "";
 
-// Hàm khởi tạo EA
 int OnInit() {
    trade.SetExpertMagicNumber(MagicNumber);
-   // Không cần kiểm tra WebRequest trong OnInit, chỉ cần cấu hình trong MT5
    return(INIT_SUCCEEDED);
 }
 
-// Hàm xử lý mỗi tick
 void OnTick() {
    string response = GetSignalFromServer();
-   if (response != "" && response != "{}") { // Đảm bảo có tín hiệu hợp lệ
+   if (response != "" && response != "{}") {
+      if (!HasOpenPosition() && last_signal != "close") {
+         last_signal = "";
+      }
       ProcessSignal(response);
    }
 }
 
-// Nhận tín hiệu từ server
 string GetSignalFromServer() {
-   char data[];        // Dữ liệu gửi đi (trống vì dùng GET)
-   char result[];      // Mảng lưu kết quả trả về
+   char data[];
+   char result[];
    string headers = "Content-Type: application/json";
-   
    int res = WebRequest("GET", url, NULL, NULL, 5000, data, 0, result, headers);
-   
    if (res == 200) {
-      string response = CharArrayToString(result);
-      // Print("Nhận tín hiệu: ", response); // Uncomment để debug
-      return response;
+      return CharArrayToString(result);
    } else {
       Print("Lỗi nhận tín hiệu: ", res);
       return "";
    }
 }
 
-// Xử lý tín hiệu từ API
+bool HasOpenPosition() {
+   for (int i = PositionsTotal() - 1; i >= 0; i--) {
+      if (PositionSelectByTicket(PositionGetTicket(i))) {
+         if (PositionGetInteger(POSITION_MAGIC) == MagicNumber) {
+            return true;
+         }
+      }
+   }
+   return false;
+}
+
 void ProcessSignal(string signal_json) {
-   // Lấy thông tin từ JSON
    string signal = ExtractJsonValue(signal_json, "\"signal\":\"", "\"");
    int magic_number = (int)StringToInteger(ExtractJsonValue(signal_json, "\"magic_number\":", ","));
    double api_price = StringToDouble(ExtractJsonValue(signal_json, "\"current_price\":", ","));
 
-   // Kiểm tra magic_number khớp
-   if (magic_number != MagicNumber) {
-      return; // Bỏ qua nếu Magic Number không khớp
-   }
+   if (magic_number != MagicNumber) return;
 
-   // Kiểm tra giá hiện tại so với giá từ API
    double current_bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double current_ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   double price_deviation = MathAbs(current_bid - api_price) * 10000; // Chuyển sang pips
+   double price_deviation = MathAbs(current_bid - api_price) * 10000;
 
    if (price_deviation > MaxPriceDeviation) {
       Print("Giá lệch quá ", MaxPriceDeviation, " pips (API: ", api_price, ", Hiện tại: ", current_bid, "). Bỏ qua lệnh.");
       return;
    }
 
-   // Kiểm tra tín hiệu mới để tránh lặp
-   if (signal == last_signal) {
-      return; // Bỏ qua nếu tín hiệu không thay đổi
+   if (signal == last_signal) return;
+
+   if (HasOpenPosition()) {
+      if (signal == "close") {
+         CloseAll();
+         last_signal = signal;
+      }
+      return;
    }
 
-   // Xử lý tín hiệu
    if (signal == "buy") {
       OpenBuy(current_ask);
       last_signal = signal;
@@ -88,7 +92,6 @@ void ProcessSignal(string signal_json) {
    }
 }
 
-// Trích xuất giá trị từ JSON thủ công
 string ExtractJsonValue(string json, string key, string end_char) {
    int start_pos = StringFind(json, key) + StringLen(key);
    int end_pos = StringFind(json, end_char, start_pos);
@@ -98,7 +101,6 @@ string ExtractJsonValue(string json, string key, string end_char) {
    return "";
 }
 
-// Mở lệnh Buy
 void OpenBuy(double ask) {
    double sl = ask - SL * _Point * 10;
    double tp = ask + TP * _Point * 10;
@@ -109,7 +111,6 @@ void OpenBuy(double ask) {
    }
 }
 
-// Mở lệnh Sell
 void OpenSell(double bid) {
    double sl = bid + SL * _Point * 10;
    double tp = bid - TP * _Point * 10;
@@ -120,7 +121,6 @@ void OpenSell(double bid) {
    }
 }
 
-// Đóng tất cả lệnh
 void CloseAll() {
    for (int i = PositionsTotal() - 1; i >= 0; i--) {
       if (PositionSelectByTicket(PositionGetTicket(i))) {
@@ -132,7 +132,6 @@ void CloseAll() {
    }
 }
 
-// Hàm dọn dẹp
 void OnDeinit(const int reason) {
    Print("EA đã dừng, lý do: ", reason);
 }
