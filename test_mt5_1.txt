@@ -1,0 +1,84 @@
+//+------------------------------------------------------------------+
+//|                       Supertrend EA for MT5                     |
+//+------------------------------------------------------------------+
+#include <Trade/Trade.mqh>
+CTrade trade;
+
+// Tham số Supertrend
+input int SupertrendPeriod = 10;
+input double SupertrendMultiplier = 2.0;
+input double riskPercent = 0.05; // 1% rủi ro trên mỗi giao dịch
+input double von = 1000; // Vốn ban đầu
+
+// Biến toàn cục
+int viTri = 0; // 0: No trade, 1: Buy, -1: Sell
+double giaVao = 0.0;
+
+// Hàm lấy dữ liệu Supertrend
+double GetSupertrendSignal()
+{
+    double trend[];
+    int handle = iCustom(_Symbol, PERIOD_H4, "SuperTrend", SupertrendPeriod, SupertrendMultiplier);
+
+    if (handle == INVALID_HANDLE) {
+        Print("Lỗi: Không thể tải chỉ báo SuperTrend!");
+        return 0;
+    }
+
+    CopyBuffer(handle, 1, 0, 1, trend);
+    return trend[0];
+}
+
+
+// Hàm xác định khối lượng vào lệnh
+double CalculateLotSize()
+{
+    double pip_risk = 70;
+    double pip_value = 0.0001 * 100000;
+    double khoi_luong = (von * riskPercent) / (pip_risk * pip_value);
+    return NormalizeDouble(khoi_luong, 2);
+}
+
+void OnTick()
+{
+    // Lấy xu hướng từ Supertrend
+    double xuHuongH4 = GetSupertrendSignal();
+    double giaHienTai = (SymbolInfoDouble(_Symbol, SYMBOL_BID) + SymbolInfoDouble(_Symbol, SYMBOL_ASK)) / 2.0;
+    double lotSize = CalculateLotSize();
+
+    if (viTri == 1)
+    {
+        double loiNhuanPip = (giaHienTai - giaVao) * 10000;
+        PrintFormat("Buy: %f, Current: %f, TP/SL: %f pip", giaVao, giaHienTai, loiNhuanPip);
+        if (xuHuongH4 == -1 || loiNhuanPip >= 120 || loiNhuanPip <= -70)
+        {
+            trade.PositionClose(_Symbol);
+            viTri = 0;
+        }
+    }
+    else if (viTri == -1)
+    {
+        double loiNhuanPip = (giaVao - giaHienTai) * 10000;
+        PrintFormat("Sell: %f, Current: %f, TP/SL: %f pip", giaVao, giaHienTai, loiNhuanPip);
+        if (xuHuongH4 == 1 || loiNhuanPip >= 120 || loiNhuanPip <= -70)
+        {
+            trade.PositionClose(_Symbol);
+            viTri = 0;
+        }
+    }
+    else if (viTri == 0)
+    {
+        if (xuHuongH4 == 1)
+        {
+            trade.Buy(lotSize, _Symbol);
+            viTri = 1;
+            giaVao = giaHienTai;
+        }
+        else if (xuHuongH4 == -1)
+        {
+            trade.Sell(lotSize, _Symbol);
+            viTri = -1;
+            giaVao = giaHienTai;
+        }
+    }
+}

@@ -10,6 +10,8 @@ import uvicorn
 import logging
 import pandas_ta as ta
 
+
+
 mau_tien = "GBPUSD"
 # mau_tien = "EURUSD"
 
@@ -149,17 +151,17 @@ async def kiem_tra_chien_luoc():
                 vi_tri = 'sell'
                 gia_vao = gia_hien_tai
                 update_signal("sell", gia_hien_tai, magic_number)
-            elif vi_tri == 'buy' and (xu_huong_h4 == -1 or loi_nhuan_pip >= 3 or loi_nhuan_pip <= -3):
+            elif vi_tri == 'buy' and (xu_huong_h4 == -1 or loi_nhuan_pip >= 100 or loi_nhuan_pip <= -60):
                 update_signal("close", gia_hien_tai, magic_number)
                 vi_tri = None
-            elif vi_tri == 'sell' and (xu_huong_h4 == 1 or loi_nhuan_pip >= 3 or loi_nhuan_pip <= -3):
+            elif vi_tri == 'sell' and (xu_huong_h4 == 1 or loi_nhuan_pip >= 100 or loi_nhuan_pip <= -60):
                 update_signal("close", gia_hien_tai, magic_number)
                 vi_tri = None
 
-            await asyncio.sleep(5)
+            await asyncio.sleep(30)
         except Exception as e:
             logging.error(f"Lỗi trong chiến lược: {e}")
-            await asyncio.sleep(5)
+            await asyncio.sleep(30)
 
 @app.on_event("startup")
 async def startup_event():

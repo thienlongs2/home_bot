@@ -55,7 +55,7 @@ string GetSignalFromServer() {
 
    if (res == 200) {
       string response = CharArrayToString(result);
-      //Print("Nhận phản hồi: ", response);
+      Print("Nhận phản hồi: ", response);
       return response;
    } else {
       Print("Lỗi nhận tín hiệu. HTTP: ", res, " | MT5 Error: ", GetLastError());

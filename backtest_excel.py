@@ -29,7 +29,7 @@ def lay_du_lieu(symbol, khung_thoi_gian, so_nen):
 
 
 # Hàm backtest chiến lược
-def backtest_chien_luoc(von_ban_dau=1000, risk_percent=0.1):
+def backtest_chien_luoc(von_ban_dau=1000, risk_percent=0.05):
     von_cao_nhat = von_ban_dau
     drawdown_max = 0
     du_lieu_h4 = lay_du_lieu(mau_tien, mt5.TIMEFRAME_H4, 500)
